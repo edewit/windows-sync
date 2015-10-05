@@ -114,6 +114,7 @@
     <Compile Include="JsonMergePatchEdit.cs" />
     <Compile Include="JsonMergePatchMessage.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="SyncClient.cs" />
     <Content Include="Properties\aerogear_windows_sync.rd.xml" />
   </ItemGroup>
   <ItemGroup>

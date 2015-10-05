@@ -1,8 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using synchronizers;
 
 namespace aerogear_windows_sync
@@ -36,7 +33,7 @@ namespace aerogear_windows_sync
             SaveEdits(edit, documentId, clientId);
             var patchedShadow = DiffPatchShadow(shadow, edit);
             SaveShadow(IncrementClientVersion(patchedShadow));
-            return GetPendingEdits(document.Id(), document .ClientId());
+            return GetPendingEdits(document.Id(), document.ClientId());
         }
 
         public void Patch(IPatchMessage<TS, TD> patchMessage)
@@ -60,23 +57,40 @@ namespace aerogear_windows_sync
                 }
                 if (HasServerVersion(edit, shadow))
                 {
-                    DiscardEdit(edit, documentId, clientId, iterator);
+                    DiscardEdit(edit, documentId, clientId, patchMessage.Edits());
                     continue;
                 }
-                if (allVersionsMatch(edit, shadow) || IsSeedVersion(edit))
+                if (AllVersionsMatch(edit, shadow) || IsSeedVersion(edit))
                 {
-                    final ShadowDocument< T > patchedShadow = clientSynchronizer.patchShadow(edit, shadow);
+                    var patchedShadow = _clientSynchronizer.PatchShadow(edit, shadow);
                     if (IsSeedVersion(edit))
                     {
-                        shadow = saveShadowAndRemoveEdit(withClientVersion(patchedShadow, 0), edit);
+                        shadow = SaveShadowAndRemoveEdit(WithClientVersion(patchedShadow, 0), edit);
                     }
                     else
                     {
-                        shadow = saveShadowAndRemoveEdit(IncrementServerVersion(patchedShadow), edit);
+                        shadow = SaveShadowAndRemoveEdit(IncrementServerVersion(patchedShadow), edit);
                     }
                 }
             }
             return shadow;
+        }
+
+        private IDocument<T> PatchDocument(IShadowDocument<T> shadowDocument)
+        {
+            var clientDocument = GetClientDocumentForShadow(shadowDocument);
+            var edit = ClientDiff(clientDocument, shadowDocument);
+            var patched = PatchDocument(edit, clientDocument);
+            SaveDocument(patched);
+            SaveBackupShadow(shadowDocument);
+            _patchObservable.Changed();
+            _patchObservable.NotifyPatched(patched);
+            return patched;
+        }
+
+        private IClientDocument<T> GetClientDocumentForShadow(IShadowDocument<T> shadow)
+        {
+            return _clientDataStore.GetClientDocument(shadow.Document().Id(), shadow.Document().ClientId());
         }
 
         private IClientDocument<T> PatchDocument(TS edit, IClientDocument<T> clientDocument)
@@ -94,7 +108,18 @@ namespace aerogear_windows_sync
             return edit.ClientVersion() == -1;
         }
 
-        private IShadowDocument<T> restoreBackup(IShadowDocument<T> shadow, TS edit)
+        private IShadowDocument<T> WithClientVersion(IShadowDocument<T> shadow, long clientVersion)
+        {
+            return NewShadowDoc(shadow.ServerVersion(), clientVersion, shadow.Document());
+        }
+
+        private IShadowDocument<T> SaveShadowAndRemoveEdit(IShadowDocument<T> shadow, TS edit)
+        {
+            _clientDataStore.RemoveEdit(edit, shadow.Document().Id(), shadow.Document().ClientId());
+            return SaveShadow(shadow);
+        }
+
+        private IShadowDocument<T> RestoreBackup(IShadowDocument<T> shadow, TS edit)
         {
             var documentId = shadow.Document().Id();
             var clientId = shadow.Document().ClientId();
@@ -107,8 +132,29 @@ namespace aerogear_windows_sync
             }
             else
             {
-                throw new IllegalStateException("Backup version [" + backup.version() + "] does not match edit client version [" + edit.clientVersion() + ']');
+                throw new InvalidOperationException(string.Format("Backup version [{0}] does not match edit client version [{1}]", backup.Version(), edit.ClientVersion()));
             }
+        }
+
+        private bool HasServerVersion(TS edit, IShadowDocument<T> shadow)
+        {
+            return edit.ServerVersion() < shadow.ServerVersion();
+        }
+
+        private void DiscardEdit(TS edit, string documentId, string clientId, Queue<TS> iterator)
+        {
+            _clientDataStore.RemoveEdit(edit, documentId, clientId);
+            iterator.Dequeue();
+        }
+
+        private bool AllVersionsMatch(TS edit, IShadowDocument<T> shadow)
+        {
+            return edit.ServerVersion() == shadow.ServerVersion() && edit.ClientVersion() == shadow.ClientVersion();
+        }
+
+        private TS ClientDiff(IClientDocument<T> doc, IShadowDocument<T> shadow)
+        {
+            return _clientSynchronizer.ClientDiff(shadow, doc);
         }
 
         private IBackupShadowDocument<T> GetBackupShadowDocument(string documentId, string clientId)
@@ -147,6 +193,28 @@ namespace aerogear_windows_sync
             return _clientSynchronizer.PatchShadow(edit, shadow);
         }
 
+ 
+        public void AddPatchListener(IPatchListener<T> patchListener)
+        {
+            _patchObservable.AddPatchListener(patchListener);
+        }
+
+        public void RemovePatchListener(IPatchListener<T> patchListener)
+        {
+            _patchObservable.RemovePatchListener(patchListener);
+        }
+
+        public void RemovePatchListeners()
+        {
+            _patchObservable.RemovePatchListeners();
+        }
+
+        public int CountPatchListeners()
+        {
+            return _patchObservable.CountPatchListeners();
+        }
+
+
         private IPatchMessage<TS, TD> GetPendingEdits(string documentId, string clientId)
         {
             return _clientSynchronizer.CreatePatchMessage(documentId, clientId, _clientDataStore.GetEdits(documentId, clientId));
@@ -168,6 +236,13 @@ namespace aerogear_windows_sync
             _clientDataStore.SaveShadowDocument(newShadow);
             return newShadow;
         }
+
+        private IShadowDocument<T> SaveShadow(IShadowDocument<T> shadow, TS edit)
+        {
+            _clientDataStore.RemoveEdit(edit, shadow.Document().Id(), shadow.Document().ClientId());
+            return SaveShadow(shadow);
+        }
+
 
         private void SaveBackupShadow(IShadowDocument<T> newShadow)
         {
